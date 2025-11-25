@@ -59,6 +59,25 @@ def get_current_code():
     save_codes(codes)
     return code
 
+# ───────────────── Gmail pool helpers ───────────────── #
+def load_gmails():
+    cfg = config_collection.find_one({"_id": "gmails"}) or {}
+    return cfg.get("list", [])
+
+def save_gmails(list_of_emails):
+    config_collection.update_one({"_id": "gmails"}, {"$set": {"list": list_of_emails}}, upsert=True)
+
+def pop_one_gmail():
+    """
+    Pop and return the first gmail from stored list. Returns None if empty.
+    """
+    gmails = load_gmails()
+    if not gmails:
+        return None
+    gmail = gmails.pop(0)
+    save_gmails(gmails)
+    return gmail
+
 # ───────────────── Helpers ───────────────── #
 def gen_token(n: int = 16) -> str:
     alphabet = string.ascii_letters + string.digits
@@ -140,16 +159,11 @@ async def start(bot, message):
 
 @Bot.on_callback_query(filters.regex("^verify$"))
 async def verify_channels(bot, query):
-    """
-    When user clicks Verify, show "3." and provide a Joined button.
-    User should click Joined (simulates they joined channels).
-    """
     try:
         await query.message.delete()
     except Exception:
         pass
 
-    # Show "3." and a Joined button (user clicks joined to continue)
     join_btn = InlineKeyboardMarkup([
         [InlineKeyboardButton("Joined ✅", callback_data="joined")]
     ])
@@ -162,9 +176,6 @@ async def verify_channels(bot, query):
 
 @Bot.on_callback_query(filters.regex("^joined$"))
 async def joined_handler(bot, query):
-    """
-    After clicking Joined, show welcome message and Find Unused Accounts button.
-    """
     try:
         await query.message.delete()
     except Exception:
@@ -182,9 +193,6 @@ async def joined_handler(bot, query):
 
 @Bot.on_callback_query(filters.regex("^find_accounts$"))
 async def find_accounts(bot, query):
-    """
-    Show server selection (India / Singapore).
-    """
     try:
         await query.message.delete()
     except Exception:
@@ -203,9 +211,6 @@ async def find_accounts(bot, query):
 
 @Bot.on_callback_query(filters.regex(r"^server:(.+)$"))
 async def server_selected(bot, query):
-    """
-    After server selection, show found accounts message and Show 1 Account Result button.
-    """
     server = query.data.split(":", 1)[1]
     try:
         await query.message.delete()
@@ -224,16 +229,17 @@ async def server_selected(bot, query):
 
 @Bot.on_callback_query(filters.regex(r"^show_account:(.+)$"))
 async def show_account(bot, query):
-    """
-    Generate one random account and show details.
-    """
     server = query.data.split(":", 1)[1]
     try:
         await query.message.delete()
     except Exception:
         pass
 
-    gmail = gen_random_gmail()
+    # Try to get a gmail from stored list (pop first). If none, fallback to random.
+    gmail = pop_one_gmail()
+    if gmail is None:
+        gmail = gen_random_gmail()
+
     password = gen_random_password()
     level = gen_random_level()
     last_login = gen_random_last_login_year()
@@ -259,9 +265,6 @@ async def show_account(bot, query):
 
 @Bot.on_callback_query(filters.regex("^access_gmail$"))
 async def access_gmail(bot, query):
-    """
-    Placeholder reply for Access Gmail button.
-    """
     try:
         await query.message.delete()
     except Exception:
@@ -275,6 +278,50 @@ async def access_gmail(bot, query):
 
 # --- end modified flow ---
 
+# ───────────────── Admin commands for Gmail pool ───────────────── #
+@Bot.on_message(filters.command("gmail") & filters.private)
+async def set_gmails(bot, message):
+    """
+    Admin-only. Usage:
+    /gmail rnd@gmail.com ahs@gmail.com another@gmail.com
+    This will overwrite the whole gmail pool with provided emails (space separated).
+    """
+    if message.from_user.id not in ADMINS:
+        return await message.reply("You are not authorized to use this command.")
+    parts = message.text.split()[1:]
+    if not parts:
+        return await message.reply("Usage: /gmail email1 email2 email3 ...")
+    # sanitize: keep only strings containing '@'
+    emails = [p.strip() for p in parts if "@" in p]
+    if not emails:
+        return await message.reply("No valid emails found. Include emails separated by space.")
+    save_gmails(emails)
+    await message.reply(f"✅ Gmail pool updated. Total {len(emails)} emails set.")
+
+@Bot.on_message(filters.command("showgmails") & filters.private)
+async def show_gmails(bot, message):
+    """
+    Admin-only: show current gmail pool (not destructive).
+    """
+    if message.from_user.id not in ADMINS:
+        return await message.reply("You are not authorized to use this command.")
+    gmails = load_gmails()
+    if not gmails:
+        return await message.reply("Gmail pool is empty.")
+    text = "Current Gmail pool (first shown will be popped on use):\n\n" + "\n".join(gmails)
+    await message.reply(text)
+
+@Bot.on_message(filters.command("cleargmails") & filters.private)
+async def clear_gmails(bot, message):
+    """
+    Admin-only: clear the gmail pool.
+    """
+    if message.from_user.id not in ADMINS:
+        return await message.reply("You are not authorized to use this command.")
+    save_gmails([])
+    await message.reply("✅ Gmail pool cleared.")
+
+# ───────────────── Existing verify/gen_code handlers (unchanged) ───────────────── #
 @Bot.on_callback_query(filters.regex("^gen_code$"))
 async def generate_code(bot, query):
     user_id = query.from_user.id
