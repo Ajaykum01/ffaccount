@@ -7,10 +7,7 @@ import aiohttp
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pyrogram import Client, filters
-from pyrogram.types import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from datetime import datetime
@@ -35,7 +32,6 @@ Bot = Client(
     api_hash=os.environ["API_HASH"]
 )
 
-# ───────────────── Constants / Links ───────────────── #
 HOW_TO_VERIFY_URL = "https://t.me/kpslinkteam/52"
 FORCE_SUB_LINKS = [
     "https://yt.openinapp.co/fatz4",
@@ -44,7 +40,24 @@ FORCE_SUB_LINKS = [
     "https://t.me/+hXaGwny7nVo3NDM9",
 ]
 
+# ───────────────── AroLinks API ───────────────── #
 AROLINKS_API = "7a04b0ba40696303483cd4be8541a1a8d831141f"
+
+# ───────────────── Codes instead of timed links ───────────────── #
+def load_codes():
+    config = config_collection.find_one({"_id": "codes"}) or {}
+    return config.get("codes", [])
+
+def save_codes(codes: list):
+    config_collection.update_one({"_id": "codes"}, {"$set": {"codes": codes}}, upsert=True)
+
+def get_current_code():
+    codes = load_codes()
+    if not codes:
+        return None  # no codes left
+    code = codes.pop(0)  # take first
+    save_codes(codes)
+    return code
 
 # ───────────────── Helpers ───────────────── #
 def gen_token(n: int = 16) -> str:
@@ -74,69 +87,12 @@ def ensure_user(user_id: int):
     if not users_collection.find_one({"_id": user_id}):
         users_collection.insert_one({"_id": user_id})
 
-# Demo account generator (for FF accounts)
-def gen_demo_gmail():
-    name_part = "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    gmail = f"{name_part}{random.randint(10,999)}@gmail.com"
-    pwd_chars = string.ascii_letters + string.digits + "!@#$%&*"
-    password = "".join(random.choices(pwd_chars, k=random.randint(8, 14)))
-    level = random.randint(1, 90)
-    last_login_year = random.randint(2000, 2023)
-    return gmail, password, level, last_login_year
-
-# ───────────────── Health Check (builtin) ───────────────── #
-PORT = int(os.environ.get("PORT", 8080))
-
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path in ("/", "/health"):
-            self.send_response(200)
-            self.send_header("Content-type", "text/plain")
-            self.end_headers()
-            self.wfile.write(b"Bot is Alive!")
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-
-    def log_message(self, format, *args):
-        return  # silence logs
-
-def run_server():
-    server = HTTPServer(("0.0.0.0", PORT), HealthCheckHandler)
-    server.serve_forever()
-
-# ───────────────── Bot Flow: Buttons / Keyboards ───────────────── #
-def force_sub_buttons():
-    buttons = [[InlineKeyboardButton("Subscribe Channel 😎", url=url)] for url in FORCE_SUB_LINKS]
-    buttons.append([InlineKeyboardButton("Verify ✅", callback_data="verify")])
-    return InlineKeyboardMarkup(buttons)
-
-def after_verify_markup():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("Find unused accounts 🔎", callback_data="find_accounts")]])
-
-def server_choice_markup():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("India", callback_data="server_india"),
-         InlineKeyboardButton("Singapore", callback_data="server_sg")]
-    ])
-
-def show_account_button():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("Show 1 Account Result", callback_data="show_one")]])
-
-def access_gmail_button():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("Access Gmail To Change Details", callback_data="access_gmail")]])
-
 # ───────────────── Handlers ───────────────── #
 @Bot.on_message(filters.command("start") & filters.private)
 async def start(bot, message):
     user_id = message.from_user.id
     ensure_user(user_id)
 
-    # handle deep-link payload (verification)
     if len(message.command) > 1:
         payload = message.command[1]
         if payload.startswith("GL"):
@@ -159,16 +115,13 @@ async def start(bot, message):
                 reply_markup=btn
             )
 
-    # default start message (force subscribe)
-    await message.reply("**JOIN GIVEN CHANNEL TO GET REDEEM CODE**", reply_markup=force_sub_buttons())
+    buttons = [[InlineKeyboardButton("Subscribe Channel 😎", url=url)] for url in FORCE_SUB_LINKS]
+    buttons.append([InlineKeyboardButton("Verify ✅", callback_data="verify")])
+    await message.reply("**JOIN GIVEN CHANNEL TO GET REDEEM CODE**", reply_markup=InlineKeyboardMarkup(buttons))
 
 @Bot.on_callback_query(filters.regex("^verify$"))
 async def verify_channels(bot, query):
-    try:
-        await query.message.delete()
-    except Exception:
-        pass
-
+    await query.message.delete()
     await query.message.reply(
         "🙏 Welcome to NST Free Google Play Redeem Code Bot RS30-200 🪙\nClick **Generate Code** to start verification.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Generate Code", callback_data="gen_code")]])
@@ -225,62 +178,44 @@ async def final_verify(bot, query):
 
     tokens_collection.update_one({"_id": token}, {"$set": {"used": True, "used_at": datetime.utcnow()}})
 
-    # --- Instead of giving a redeem code, continue with the FF accounts flow (demo) ---
+    code = get_current_code()
+    if not code:
+        caption = "❌ No redeem codes available right now. Please try again later."
+    else:
+        caption = (
+            "✅ Verification Successful!\n\n"
+            f"🎁 Redeem Code:- `{code}`\n\n"
+            "🔄 You can generate again later."
+        )
+
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Generate Again", callback_data="gen_code")]
+    ])
+
     try:
         await query.message.delete()
     except Exception:
         pass
 
-    await bot.send_message(
-        user_id,
-        "Welcome to our official FF accounts bot.\n\nChoose an option below.",
-        reply_markup=after_verify_markup()
-    )
+    await bot.send_message(user_id, caption, reply_markup=buttons, disable_web_page_preview=True)
     await query.answer("Verified ✅")
 
-# ---- New FF account flow handlers ----
-@Bot.on_callback_query(filters.regex("^find_accounts$"))
-async def cb_find_accounts(bot, query):
-    await query.answer()
-    await query.message.edit_text("Select Your Server", reply_markup=server_choice_markup())
+# ───────────────── Admin ───────────────── #
+@Bot.on_message(filters.command("time") & filters.private)
+async def set_codes(bot, message):
+    if message.from_user.id not in ADMINS:
+        return await message.reply("You are not authorized to use this command.")
 
-@Bot.on_callback_query(filters.regex("^server_india$"))
-async def cb_server_india(bot, query):
-    await query.answer("India selected")
-    await query.message.edit_text(
-        "We Found More Unused FF Accounts For You. Click Below To Get.",
-        reply_markup=show_account_button()
-    )
+    try:
+        parts = message.text.split()[1:]  # skip "/time"
+        if not parts:
+            return await message.reply("Usage: /time CODE1 CODE2 CODE3 ...")
 
-@Bot.on_callback_query(filters.regex("^server_sg$"))
-async def cb_server_sg(bot, query):
-    await query.answer("Singapore selected")
-    await query.message.edit_text(
-        "We Found More Unused FF Accounts For You. Click Below To Get.",
-        reply_markup=show_account_button()
-    )
+        save_codes(parts)
+        await message.reply(f"✅ Codes updated successfully!\n\nTotal {len(parts)} codes set.")
+    except Exception as e:
+        await message.reply(f"Error: {e}")
 
-@Bot.on_callback_query(filters.regex("^show_one$"))
-async def cb_show_one(bot, query):
-    await query.answer()
-    gmail, password, level, last_login = gen_demo_gmail()
-    demo_notice = "⚠️ Demo account (for testing only). These are randomly generated placeholders."
-    result_text = (
-        f"{demo_notice}\n\n"
-        f"Gmail: {gmail}\n"
-        f"Password: {password}\n"
-        f"Level: {level}\n"
-        f"Last Login: {last_login}\n\n"
-        "Note: These are placeholder/demo accounts generated by the bot."
-    )
-    await query.message.edit_text(result_text, reply_markup=access_gmail_button(), disable_web_page_preview=True)
-
-@Bot.on_callback_query(filters.regex("^access_gmail$"))
-async def cb_access_gmail(bot, query):
-    await query.answer()
-    await query.message.edit_text("We Soon Add This Features.")
-
-# ───────────────── Admin / Broadcast (kept) ───────────────── #
 @Bot.on_message(filters.command("broadcast") & filters.private)
 async def broadcast(bot, message):
     if message.from_user.id not in ADMINS:
@@ -297,8 +232,23 @@ async def broadcast(bot, message):
             continue
     await message.reply(f"Broadcast sent to {count} users.")
 
+# ───────────────── Health Check ───────────────── #
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is Alive!")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+def run_server():
+    server = HTTPServer(("0.0.0.0", 8080), HealthCheckHandler)
+    server.serve_forever()
+
 # ───────────────── Main ───────────────── #
 if __name__ == "__main__":
     threading.Thread(target=run_server, daemon=True).start()
-    print(f"Bot starting... Health server on port {PORT}")
     Bot.run()
