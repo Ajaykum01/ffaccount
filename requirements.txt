@@ -1,5 +1,7 @@
-pyrogram==2.0.106
+pyrogram
 tgcrypto
-play_scraper
+pymongo
+python-dotenv
+pytz
+aiohttp
 requests
-Flask==2.3.2
