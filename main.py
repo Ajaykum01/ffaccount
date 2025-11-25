@@ -168,7 +168,7 @@ async def verify_channels(bot, query):
     ])
     await bot.send_message(
         query.from_user.id,
-        "3.",
+        "Click Below Joined To Start.",
         reply_markup=join_btn
     )
     await query.answer()
@@ -242,8 +242,7 @@ async def show_account(bot, query):
         # server pool empty — inform user (no random fallback as requested)
         await bot.send_message(
             query.from_user.id,
-            "❌ No Gmail accounts available for this server right now.\n\n"
-            "Admins: please set Gmail lists with /ingmail or /sigmail."
+            "❌ No Gmail accounts available for this server right now.Try Later\n\n"
         )
         await query.answer("No gmails available", show_alert=True)
         return
