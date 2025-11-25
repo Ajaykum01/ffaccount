@@ -59,24 +59,28 @@ def get_current_code():
     save_codes(codes)
     return code
 
-# ───────────────── Gmail pool helpers ───────────────── #
-def load_gmails():
-    cfg = config_collection.find_one({"_id": "gmails"}) or {}
+# ───────────────── Server-specific Gmail pool helpers ───────────────── #
+def _load_pool(key: str):
+    cfg = config_collection.find_one({"_id": key}) or {}
     return cfg.get("list", [])
 
-def save_gmails(list_of_emails):
-    config_collection.update_one({"_id": "gmails"}, {"$set": {"list": list_of_emails}}, upsert=True)
+def _save_pool(key: str, list_of_emails):
+    config_collection.update_one({"_id": key}, {"$set": {"list": list_of_emails}}, upsert=True)
 
-def pop_one_gmail():
+def pop_from_pool(key: str):
     """
-    Pop and return the first gmail from stored list. Returns None if empty.
+    Pop and return the first email from stored list. Returns None if empty.
     """
-    gmails = load_gmails()
-    if not gmails:
+    lst = _load_pool(key)
+    if not lst:
         return None
-    gmail = gmails.pop(0)
-    save_gmails(gmails)
-    return gmail
+    email = lst.pop(0)
+    _save_pool(key, lst)
+    return email
+
+# keys we'll use
+POOL_INDIA = "gmails_india"
+POOL_SGP = "gmails_singapore"
 
 # ───────────────── Helpers ───────────────── #
 def gen_token(n: int = 16) -> str:
@@ -107,11 +111,6 @@ def ensure_user(user_id: int):
         users_collection.insert_one({"_id": user_id})
 
 # ───────────────── Helpers for FF accounts simulation ───────────────── #
-def gen_random_gmail():
-    name_len = random.randint(6, 12)
-    name = ''.join(random.choices(string.ascii_lowercase + string.digits, k=name_len))
-    return f"{name}@gmail.com"
-
 def gen_random_password():
     chars = string.ascii_letters + string.digits + "!@#$%^&*"
     length = random.randint(8, 14)
@@ -235,10 +234,19 @@ async def show_account(bot, query):
     except Exception:
         pass
 
-    # Try to get a gmail from stored list (pop first). If none, fallback to random.
-    gmail = pop_one_gmail()
+    # pick pool key
+    pool_key = POOL_INDIA if server.lower() == "india" else POOL_SGP
+
+    gmail = pop_from_pool(pool_key)
     if gmail is None:
-        gmail = gen_random_gmail()
+        # server pool empty — inform user (no random fallback as requested)
+        await bot.send_message(
+            query.from_user.id,
+            "❌ No Gmail accounts available for this server right now.\n\n"
+            "Admins: please set Gmail lists with /ingmail or /sigmail."
+        )
+        await query.answer("No gmails available", show_alert=True)
+        return
 
     password = gen_random_password()
     level = gen_random_level()
@@ -278,48 +286,77 @@ async def access_gmail(bot, query):
 
 # --- end modified flow ---
 
-# ───────────────── Admin commands for Gmail pool ───────────────── #
-@Bot.on_message(filters.command("gmail") & filters.private)
-async def set_gmails(bot, message):
+# ───────────────── Admin commands for per-server Gmail pools ───────────────── #
+@Bot.on_message(filters.command("ingmail") & filters.private)
+async def set_ingmails(bot, message):
     """
     Admin-only. Usage:
-    /gmail rnd@gmail.com ahs@gmail.com another@gmail.com
-    This will overwrite the whole gmail pool with provided emails (space separated).
+    /ingmail abc@mail.com def@gmail.com ...
+    This overwrites the India pool with provided emails.
     """
     if message.from_user.id not in ADMINS:
         return await message.reply("You are not authorized to use this command.")
     parts = message.text.split()[1:]
     if not parts:
-        return await message.reply("Usage: /gmail email1 email2 email3 ...")
-    # sanitize: keep only strings containing '@'
+        return await message.reply("Usage: /ingmail email1 email2 ...")
     emails = [p.strip() for p in parts if "@" in p]
     if not emails:
         return await message.reply("No valid emails found. Include emails separated by space.")
-    save_gmails(emails)
-    await message.reply(f"✅ Gmail pool updated. Total {len(emails)} emails set.")
+    _save_pool(POOL_INDIA, emails)
+    await message.reply(f"✅ India Gmail pool updated. Total {len(emails)} emails set.")
 
-@Bot.on_message(filters.command("showgmails") & filters.private)
-async def show_gmails(bot, message):
+@Bot.on_message(filters.command("sigmail") & filters.private)
+async def set_sigmails(bot, message):
     """
-    Admin-only: show current gmail pool (not destructive).
+    Admin-only. Usage:
+    /sigmail abc@mail.com def@gmail.com ...
+    This overwrites the Singapore pool with provided emails.
     """
     if message.from_user.id not in ADMINS:
         return await message.reply("You are not authorized to use this command.")
-    gmails = load_gmails()
+    parts = message.text.split()[1:]
+    if not parts:
+        return await message.reply("Usage: /sigmail email1 email2 ...")
+    emails = [p.strip() for p in parts if "@" in p]
+    if not emails:
+        return await message.reply("No valid emails found. Include emails separated by space.")
+    _save_pool(POOL_SGP, emails)
+    await message.reply(f"✅ Singapore Gmail pool updated. Total {len(emails)} emails set.")
+
+@Bot.on_message(filters.command("show_ingmail") & filters.private)
+async def show_ingmails(bot, message):
+    if message.from_user.id not in ADMINS:
+        return await message.reply("You are not authorized to use this command.")
+    gmails = _load_pool(POOL_INDIA)
     if not gmails:
-        return await message.reply("Gmail pool is empty.")
-    text = "Current Gmail pool (first shown will be popped on use):\n\n" + "\n".join(gmails)
+        return await message.reply("India Gmail pool is empty.")
+    # show up to first 2000 characters (Telegram message limit safety)
+    text = "India Gmail pool (first shown will be popped on use):\n\n" + "\n".join(gmails)
     await message.reply(text)
 
-@Bot.on_message(filters.command("cleargmails") & filters.private)
-async def clear_gmails(bot, message):
-    """
-    Admin-only: clear the gmail pool.
-    """
+@Bot.on_message(filters.command("show_sigmail") & filters.private)
+async def show_sigmails(bot, message):
     if message.from_user.id not in ADMINS:
         return await message.reply("You are not authorized to use this command.")
-    save_gmails([])
-    await message.reply("✅ Gmail pool cleared.")
+    gmails = _load_pool(POOL_SGP)
+    if not gmails:
+        return await message.reply("Singapore Gmail pool is empty.")
+    text = "Singapore Gmail pool (first shown will be popped on use):\n\n" + "\n".join(gmails)
+    await message.reply(text)
+
+@Bot.on_message(filters.command("clear_ingmail") & filters.private)
+async def clear_ingmails(bot, message):
+    if message.from_user.id not in ADMINS:
+        return await message.reply("You are not authorized to use this command.")
+    _save_pool(POOL_INDIA, [])
+    await message.reply("✅ India Gmail pool cleared.")
+
+@Bot.on_message(filters.command("clear_sigmail") & filters.private)
+async def clear_sigmails(bot, message):
+    if message.from_user.id not in ADMINS:
+        return await message.reply("You are not authorized to use this command.")
+    _save_pool(POOL_SGP, [])
+    await message.reply("✅ Singapore Gmail pool cleared.")
 
 # ───────────────── Existing verify/gen_code handlers (unchanged) ───────────────── #
 @Bot.on_callback_query(filters.regex("^gen_code$"))
