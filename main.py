@@ -48,8 +48,10 @@ def load_codes():
     config = config_collection.find_one({"_id": "codes"}) or {}
     return config.get("codes", [])
 
+
 def save_codes(codes: list):
     config_collection.update_one({"_id": "codes"}, {"$set": {"codes": codes}}, upsert=True)
+
 
 def get_current_code():
     codes = load_codes()
@@ -59,13 +61,16 @@ def get_current_code():
     save_codes(codes)
     return code
 
+
 # ───────────────── Server-specific Gmail pool helpers ───────────────── #
 def _load_pool(key: str):
     cfg = config_collection.find_one({"_id": key}) or {}
     return cfg.get("list", [])
 
+
 def _save_pool(key: str, list_of_emails):
     config_collection.update_one({"_id": key}, {"$set": {"list": list_of_emails}}, upsert=True)
+
 
 def pop_from_pool(key: str):
     """
@@ -78,6 +83,7 @@ def pop_from_pool(key: str):
     _save_pool(key, lst)
     return email
 
+
 # keys we'll use
 POOL_INDIA = "gmails_india"
 POOL_SGP = "gmails_singapore"
@@ -86,6 +92,7 @@ POOL_SGP = "gmails_singapore"
 def gen_token(n: int = 16) -> str:
     alphabet = string.ascii_letters + string.digits
     return ''.join(random.choices(alphabet, k=n))
+
 
 async def shorten_with_arolinks(long_url: str) -> str:
     encoded_url = urllib.parse.quote_plus(long_url)
@@ -100,14 +107,16 @@ async def shorten_with_arolinks(long_url: str) -> str:
     except Exception:
         return ""
 
+
 async def build_verify_link(bot: Client, token: str) -> str:
     me = await bot.get_me()
     deep_link = f"https://t.me/{me.username}?start=GL{token}"
     short = await shorten_with_arolinks(deep_link)
     return short or deep_link
 
+
 def ensure_user(user_id: int):
-    # make sure user exists; don't override existing fields
+    # store per-user flags for key flow
     if not users_collection.find_one({"_id": user_id}):
         users_collection.insert_one({
             "_id": user_id,
@@ -115,17 +124,21 @@ def ensure_user(user_id: int):
             "key_verified": False
         })
 
+
 # ───────────────── Helpers for FF accounts simulation ───────────────── #
 def gen_random_password():
     chars = string.ascii_letters + string.digits + "!@#$%^&*"
     length = random.randint(8, 14)
     return ''.join(random.choices(chars, k=length))
 
+
 def gen_random_level():
     return random.randint(1, 90)
 
+
 def gen_random_last_login_year():
     return random.randint(2000, 2023)
+
 
 # ───────────────── Handlers ───────────────── #
 @Bot.on_message(filters.command("start") & filters.private)
@@ -159,6 +172,7 @@ async def start(bot, message):
     buttons.append([InlineKeyboardButton("Verify ✅", callback_data="verify")])
     await message.reply("**JOIN GIVEN CHANNEL TO GET REDEEM CODE**", reply_markup=InlineKeyboardMarkup(buttons))
 
+
 # --- Modified flow starts here ---
 
 @Bot.on_callback_query(filters.regex("^verify$"))
@@ -178,10 +192,11 @@ async def verify_channels(bot, query):
     )
     await query.answer()
 
+
 @Bot.on_callback_query(filters.regex("^joined$"))
 async def joined_handler(bot, query):
     """
-    After clicked Joined, make user enter Admin Login Key.
+    After clicked Joined, make the user enter Admin Login Key.
     """
     user_id = query.from_user.id
     ensure_user(user_id)
@@ -191,7 +206,7 @@ async def joined_handler(bot, query):
     except Exception:
         pass
 
-    # mark user as waiting for key
+    # mark this user as waiting for key, not verified yet
     users_collection.update_one(
         {"_id": user_id},
         {"$set": {"awaiting_key": True, "key_verified": False}}
@@ -202,12 +217,13 @@ async def joined_handler(bot, query):
         "🔑 *Admin Login Required*\n\n"
         "Please enter the **Admin Login Key** provided by Garena Admin."
     )
-    await query.answer("Enter admin key ✅")
+    await query.answer("Enter Admin Login Key")
 
-# Handle user typing the admin key (normal text message)
+
+# handle user messages for key input
 @Bot.on_message(filters.private & filters.text)
 async def handle_admin_key(bot, message):
-    # ignore real commands here
+    # ignore commands like /start, /keygen etc.
     if message.text.startswith("/"):
         return
 
@@ -216,22 +232,19 @@ async def handle_admin_key(bot, message):
 
     user = users_collection.find_one({"_id": user_id})
     if not user or not user.get("awaiting_key", False):
-        # user is not in key input step, ignore
+        # user is not in key step, ignore
         return
 
     key_doc = config_collection.find_one({"_id": "admin_key"}) or {}
     current_key = key_doc.get("key")
 
     if not current_key:
-        await message.reply(
-            "⚠️ No active Admin Login Key right now.\n"
-            "Please try again later."
-        )
+        await message.reply("⚠️ No active Admin Login Key right now. Please try again later.")
         return
 
     if text != current_key:
-        # wrong / expired key
-        await message.reply("❌ key is expired by Garena Admin")
+        # wrong or old key
+        await message.reply("Key is expired by Garena Admin.")
         return
 
     # correct key
@@ -243,10 +256,12 @@ async def handle_admin_key(bot, message):
     btn = InlineKeyboardMarkup([
         [InlineKeyboardButton("Find Unused Accounts", callback_data="find_accounts")]
     ])
+
     await message.reply(
         "Welcome to our official FF accounts bot.",
         reply_markup=btn
     )
+
 
 @Bot.on_callback_query(filters.regex("^find_accounts$"))
 async def find_accounts(bot, query):
@@ -255,11 +270,12 @@ async def find_accounts(bot, query):
     except Exception:
         pass
 
-    # Only allow if key verified
     user_id = query.from_user.id
     user = users_collection.find_one({"_id": user_id}) or {}
+
+    # only allow if key verified
     if not user.get("key_verified", False):
-        await query.answer("Please enter valid Admin Login Key first.", show_alert=True)
+        await query.answer("Please enter a valid Admin Login Key first.", show_alert=True)
         return
 
     markup = InlineKeyboardMarkup([
@@ -272,6 +288,7 @@ async def find_accounts(bot, query):
         reply_markup=markup
     )
     await query.answer()
+
 
 @Bot.on_callback_query(filters.regex(r"^server:(.+)$"))
 async def server_selected(bot, query):
@@ -290,6 +307,7 @@ async def server_selected(bot, query):
         reply_markup=markup
     )
     await query.answer(f"Server: {server}")
+
 
 @Bot.on_callback_query(filters.regex(r"^show_account:(.+)$"))
 async def show_account(bot, query):
@@ -335,6 +353,7 @@ async def show_account(bot, query):
     )
     await query.answer("Account shown ✅")
 
+
 @Bot.on_callback_query(filters.regex("^access_gmail$"))
 async def access_gmail(bot, query):
     try:
@@ -349,6 +368,7 @@ async def access_gmail(bot, query):
     await query.answer("Soon ✅")
 
 # --- end modified flow ---
+
 
 # ───────────────── Admin commands for per-server Gmail pools ───────────────── #
 @Bot.on_message(filters.command("ingmail") & filters.private)
@@ -369,6 +389,7 @@ async def set_ingmails(bot, message):
     _save_pool(POOL_INDIA, emails)
     await message.reply(f"✅ India Gmail pool updated. Total {len(emails)} emails set.")
 
+
 @Bot.on_message(filters.command("sigmail") & filters.private)
 async def set_sigmails(bot, message):
     """
@@ -387,6 +408,7 @@ async def set_sigmails(bot, message):
     _save_pool(POOL_SGP, emails)
     await message.reply(f"✅ Singapore Gmail pool updated. Total {len(emails)} emails set.")
 
+
 @Bot.on_message(filters.command("show_ingmail") & filters.private)
 async def show_ingmails(bot, message):
     if message.from_user.id not in ADMINS:
@@ -396,6 +418,7 @@ async def show_ingmails(bot, message):
         return await message.reply("India Gmail pool is empty.")
     text = "India Gmail pool (first shown will be popped on use):\n\n" + "\n".join(gmails)
     await message.reply(text)
+
 
 @Bot.on_message(filters.command("show_sigmail") & filters.private)
 async def show_sigmails(bot, message):
@@ -407,6 +430,7 @@ async def show_sigmails(bot, message):
     text = "Singapore Gmail pool (first shown will be popped on use):\n\n" + "\n".join(gmails)
     await message.reply(text)
 
+
 @Bot.on_message(filters.command("clear_ingmail") & filters.private)
 async def clear_ingmails(bot, message):
     if message.from_user.id not in ADMINS:
@@ -414,12 +438,14 @@ async def clear_ingmails(bot, message):
     _save_pool(POOL_INDIA, [])
     await message.reply("✅ India Gmail pool cleared.")
 
+
 @Bot.on_message(filters.command("clear_sigmail") & filters.private)
 async def clear_sigmails(bot, message):
     if message.from_user.id not in ADMINS:
         return await message.reply("You are not authorized to use this command.")
     _save_pool(POOL_SGP, [])
     await message.reply("✅ Singapore Gmail pool cleared.")
+
 
 # ───────────────── Admin Login Key: /keygen ───────────────── #
 @Bot.on_message(filters.command("keygen") & filters.private)
@@ -451,6 +477,7 @@ async def keygen(bot, message):
         f"`{new_key}`\n\n"
         "Old key is expired by Garena Admin."
     )
+
 
 # ───────────────── Existing verify/gen_code handlers (unchanged) ───────────────── #
 @Bot.on_callback_query(filters.regex("^gen_code$"))
@@ -487,6 +514,7 @@ async def generate_code(bot, query):
     await bot.send_message(user_id, caption, reply_markup=buttons, disable_web_page_preview=True)
     await query.answer()
 
+
 @Bot.on_callback_query(filters.regex(r"^final_verify:(.+)$"))
 async def final_verify(bot, query):
     user_id = query.from_user.id
@@ -510,7 +538,7 @@ async def final_verify(bot, query):
     else:
         caption = (
             "✅ Verification Successful!\n\n"
-            f"🎁 Redeem Code:- `{code}`\n\n"
+            f"🎁 Redeem Code:- {code}\n\n"
             "🔄 You can generate again later."
         )
 
@@ -525,6 +553,7 @@ async def final_verify(bot, query):
 
     await bot.send_message(user_id, caption, reply_markup=buttons, disable_web_page_preview=True)
     await query.answer("Verified ✅")
+
 
 # ───────────────── Admin ───────────────── #
 @Bot.on_message(filters.command("time") & filters.private)
@@ -542,6 +571,7 @@ async def set_codes(bot, message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
+
 @Bot.on_message(filters.command("broadcast") & filters.private)
 async def broadcast(bot, message):
     if message.from_user.id not in ADMINS:
@@ -558,6 +588,7 @@ async def broadcast(bot, message):
             continue
     await message.reply(f"Broadcast sent to {count} users.")
 
+
 # ───────────────── Health Check ───────────────── #
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -570,9 +601,11 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
 
+
 def run_server():
     server = HTTPServer(("0.0.0.0", 8080), HealthCheckHandler)
     server.serve_forever()
+
 
 # ───────────────── Main ───────────────── #
 if __name__ == "__main__":
