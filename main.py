@@ -116,13 +116,8 @@ async def build_verify_link(bot: Client, token: str) -> str:
 
 
 def ensure_user(user_id: int):
-    # store per-user flags for key flow
     if not users_collection.find_one({"_id": user_id}):
-        users_collection.insert_one({
-            "_id": user_id,
-            "awaiting_key": False,
-            "key_verified": False
-        })
+        users_collection.insert_one({"_id": user_id})
 
 
 # ───────────────── Helpers for FF accounts simulation ───────────────── #
@@ -138,6 +133,26 @@ def gen_random_level():
 
 def gen_random_last_login_year():
     return random.randint(2000, 2023)
+
+
+# ───────────────── Admin key state (in memory) ───────────────── #
+# Set of user_ids waiting to enter key
+AWAITING_KEY = set()
+# Set of user_ids that already entered correct key
+KEY_VERIFIED = set()
+
+
+def get_current_admin_key():
+    doc = config_collection.find_one({"_id": "admin_key"}) or {}
+    return doc.get("key")
+
+
+def set_current_admin_key(key: str):
+    config_collection.update_one(
+        {"_id": "admin_key"},
+        {"$set": {"key": key, "created_at": datetime.utcnow()}},
+        upsert=True
+    )
 
 
 # ───────────────── Handlers ───────────────── #
@@ -206,11 +221,10 @@ async def joined_handler(bot, query):
     except Exception:
         pass
 
-    # mark this user as waiting for key, not verified yet
-    users_collection.update_one(
-        {"_id": user_id},
-        {"$set": {"awaiting_key": True, "key_verified": False}}
-    )
+    # mark user as awaiting key
+    AWAITING_KEY.add(user_id)
+    if user_id in KEY_VERIFIED:
+        KEY_VERIFIED.discard(user_id)
 
     await bot.send_message(
         user_id,
@@ -230,28 +244,23 @@ async def handle_admin_key(bot, message):
     user_id = message.from_user.id
     text = message.text.strip()
 
-    user = users_collection.find_one({"_id": user_id})
-    if not user or not user.get("awaiting_key", False):
-        # user is not in key step, ignore
+    # only handle if user is in waiting list
+    if user_id not in AWAITING_KEY:
         return
 
-    key_doc = config_collection.find_one({"_id": "admin_key"}) or {}
-    current_key = key_doc.get("key")
+    current_key = get_current_admin_key()
 
     if not current_key:
         await message.reply("⚠️ No active Admin Login Key right now. Please try again later.")
         return
 
     if text != current_key:
-        # wrong or old key
         await message.reply("Key is expired by Garena Admin.")
         return
 
     # correct key
-    users_collection.update_one(
-        {"_id": user_id},
-        {"$set": {"awaiting_key": False, "key_verified": True}}
-    )
+    AWAITING_KEY.discard(user_id)
+    KEY_VERIFIED.add(user_id)
 
     btn = InlineKeyboardMarkup([
         [InlineKeyboardButton("Find Unused Accounts", callback_data="find_accounts")]
@@ -271,10 +280,9 @@ async def find_accounts(bot, query):
         pass
 
     user_id = query.from_user.id
-    user = users_collection.find_one({"_id": user_id}) or {}
 
     # only allow if key verified
-    if not user.get("key_verified", False):
+    if user_id not in KEY_VERIFIED:
         await query.answer("Please enter a valid Admin Login Key first.", show_alert=True)
         return
 
@@ -453,11 +461,7 @@ async def keygen(bot, message):
     else:
         new_key = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
-    config_collection.update_one(
-        {"_id": "admin_key"},
-        {"$set": {"key": new_key, "created_at": datetime.utcnow()}},
-        upsert=True
-    )
+    set_current_admin_key(new_key)
 
     await message.reply(
         "✅ New Admin Login Key generated.\n\n"
@@ -466,7 +470,7 @@ async def keygen(bot, message):
     )
 
 
-# ───────────────── Existing verify/gen_code handlers ───────────────── #
+# ───────────────── Existing verify/gen_code handlers (unchanged) ───────────────── #
 @Bot.on_callback_query(filters.regex("^gen_code$"))
 async def generate_code(bot, query):
     user_id = query.from_user.id
