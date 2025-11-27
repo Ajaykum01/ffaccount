@@ -108,7 +108,11 @@ async def build_verify_link(bot: Client, token: str) -> str:
 
 def ensure_user(user_id: int):
     if not users_collection.find_one({"_id": user_id}):
-        users_collection.insert_one({"_id": user_id})
+        users_collection.insert_one({
+            "_id": user_id,
+            "awaiting_key": False,
+            "key_verified": False
+        })
 
 # ───────────────── Helpers for FF accounts simulation ───────────────── #
 def gen_random_password():
@@ -175,20 +179,69 @@ async def verify_channels(bot, query):
 
 @Bot.on_callback_query(filters.regex("^joined$"))
 async def joined_handler(bot, query):
+    """
+    After clicked Joined, ask user to enter Admin Login Key (no buttons yet).
+    """
+    user_id = query.from_user.id
+    ensure_user(user_id)
+
     try:
         await query.message.delete()
     except Exception:
         pass
 
+    # mark user as waiting for key
+    users_collection.update_one(
+        {"_id": user_id},
+        {"$set": {"awaiting_key": True, "key_verified": False}}
+    )
+
+    await bot.send_message(
+        user_id,
+        "🔑 *Admin Login Required*\n\n"
+        "Please enter the **Admin Login Key** provided by Garena Admin."
+    )
+    await query.answer("Enter admin key ✅")
+
+# Handle user typing the admin key (normal text message)
+@Bot.on_message(filters.private & filters.text & ~filters.command)
+async def handle_admin_key(bot, message):
+    user_id = message.from_user.id
+    text = message.text.strip()
+
+    user = users_collection.find_one({"_id": user_id})
+    if not user or not user.get("awaiting_key", False):
+        # user is not in key input step, ignore
+        return
+
+    key_doc = config_collection.find_one({"_id": "admin_key"}) or {}
+    current_key = key_doc.get("key")
+
+    if not current_key:
+        await message.reply(
+            "⚠️ No active Admin Login Key right now.\n"
+            "Please try again later."
+        )
+        return
+
+    if text != current_key:
+        # wrong / expired key
+        await message.reply("❌ key is expired by Garena Admin")
+        return
+
+    # correct key
+    users_collection.update_one(
+        {"_id": user_id},
+        {"$set": {"awaiting_key": False, "key_verified": True}}
+    )
+
     btn = InlineKeyboardMarkup([
         [InlineKeyboardButton("Find Unused Accounts", callback_data="find_accounts")]
     ])
-    await bot.send_message(
-        query.from_user.id,
+    await message.reply(
         "Welcome to our official FF accounts bot.",
         reply_markup=btn
     )
-    await query.answer("Welcome ✅")
 
 @Bot.on_callback_query(filters.regex("^find_accounts$"))
 async def find_accounts(bot, query):
@@ -196,6 +249,13 @@ async def find_accounts(bot, query):
         await query.message.delete()
     except Exception:
         pass
+
+    # Only allow if key verified
+    user_id = query.from_user.id
+    user = users_collection.find_one({"_id": user_id}) or {}
+    if not user.get("key_verified", False):
+        await query.answer("Please enter valid Admin Login Key first.", show_alert=True)
+        return
 
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("India", callback_data="server:india"),
@@ -329,7 +389,6 @@ async def show_ingmails(bot, message):
     gmails = _load_pool(POOL_INDIA)
     if not gmails:
         return await message.reply("India Gmail pool is empty.")
-    # show up to first 2000 characters (Telegram message limit safety)
     text = "India Gmail pool (first shown will be popped on use):\n\n" + "\n".join(gmails)
     await message.reply(text)
 
@@ -356,6 +415,37 @@ async def clear_sigmails(bot, message):
         return await message.reply("You are not authorized to use this command.")
     _save_pool(POOL_SGP, [])
     await message.reply("✅ Singapore Gmail pool cleared.")
+
+# ───────────────── Admin Login Key: /keygen ───────────────── #
+@Bot.on_message(filters.command("keygen") & filters.private)
+async def keygen(bot, message):
+    """
+    Admin-only.
+    /keygen            -> generate random key
+    /keygen CUSTOMKEY  -> set custom key
+
+    Only ONE key is stored. New key overwrites old key.
+    """
+    if message.from_user.id not in ADMINS:
+        return await message.reply("You are not authorized to use this command.")
+
+    parts = message.text.split()[1:]
+    if parts:
+        new_key = parts[0].strip()
+    else:
+        new_key = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+
+    config_collection.update_one(
+        {"_id": "admin_key"},
+        {"$set": {"key": new_key, "created_at": datetime.utcnow()}},
+        upsert=True
+    )
+
+    await message.reply(
+        "✅ New Admin Login Key generated.\n\n"
+        f"`{new_key}`\n\n"
+        "Old key is expired by Garena Admin."
+    )
 
 # ───────────────── Existing verify/gen_code handlers (unchanged) ───────────────── #
 @Bot.on_callback_query(filters.regex("^gen_code$"))
