@@ -107,6 +107,7 @@ async def build_verify_link(bot: Client, token: str) -> str:
     return short or deep_link
 
 def ensure_user(user_id: int):
+    # make sure user exists; don't override existing fields
     if not users_collection.find_one({"_id": user_id}):
         users_collection.insert_one({
             "_id": user_id,
@@ -180,7 +181,7 @@ async def verify_channels(bot, query):
 @Bot.on_callback_query(filters.regex("^joined$"))
 async def joined_handler(bot, query):
     """
-    After clicked Joined, ask user to enter Admin Login Key (no buttons yet).
+    After clicked Joined, make user enter Admin Login Key.
     """
     user_id = query.from_user.id
     ensure_user(user_id)
@@ -204,8 +205,12 @@ async def joined_handler(bot, query):
     await query.answer("Enter admin key ✅")
 
 # Handle user typing the admin key (normal text message)
-@Bot.on_message(filters.private & filters.text & ~filters.command)
+@Bot.on_message(filters.private & filters.text)
 async def handle_admin_key(bot, message):
+    # ignore real commands here
+    if message.text.startswith("/"):
+        return
+
     user_id = message.from_user.id
     text = message.text.strip()
 
