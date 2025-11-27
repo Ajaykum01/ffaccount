@@ -173,7 +173,7 @@ async def start(bot, message):
     await message.reply("**JOIN GIVEN CHANNEL TO GET REDEEM CODE**", reply_markup=InlineKeyboardMarkup(buttons))
 
 
-# --- Modified flow starts here ---
+# --- Modified flow: verify → joined → admin key → servers ---
 
 @Bot.on_callback_query(filters.regex("^verify$"))
 async def verify_channels(bot, query):
@@ -220,7 +220,7 @@ async def joined_handler(bot, query):
     await query.answer("Enter Admin Login Key")
 
 
-# handle user messages for key input
+# handle user messages for key input (NO ~filters.command)
 @Bot.on_message(filters.private & filters.text)
 async def handle_admin_key(bot, message):
     # ignore commands like /start, /keygen etc.
@@ -322,7 +322,6 @@ async def show_account(bot, query):
 
     gmail = pop_from_pool(pool_key)
     if gmail is None:
-        # server pool empty — inform user (no random fallback as requested)
         await bot.send_message(
             query.from_user.id,
             "❌ No Gmail accounts available for this server right now.Try Later\n\n"
@@ -367,17 +366,10 @@ async def access_gmail(bot, query):
     )
     await query.answer("Soon ✅")
 
-# --- end modified flow ---
-
 
 # ───────────────── Admin commands for per-server Gmail pools ───────────────── #
 @Bot.on_message(filters.command("ingmail") & filters.private)
 async def set_ingmails(bot, message):
-    """
-    Admin-only. Usage:
-    /ingmail abc@mail.com def@gmail.com ...
-    This overwrites the India pool with provided emails.
-    """
     if message.from_user.id not in ADMINS:
         return await message.reply("You are not authorized to use this command.")
     parts = message.text.split()[1:]
@@ -392,11 +384,6 @@ async def set_ingmails(bot, message):
 
 @Bot.on_message(filters.command("sigmail") & filters.private)
 async def set_sigmails(bot, message):
-    """
-    Admin-only. Usage:
-    /sigmail abc@mail.com def@gmail.com ...
-    This overwrites the Singapore pool with provided emails.
-    """
     if message.from_user.id not in ADMINS:
         return await message.reply("You are not authorized to use this command.")
     parts = message.text.split()[1:]
@@ -479,7 +466,7 @@ async def keygen(bot, message):
     )
 
 
-# ───────────────── Existing verify/gen_code handlers (unchanged) ───────────────── #
+# ───────────────── Existing verify/gen_code handlers ───────────────── #
 @Bot.on_callback_query(filters.regex("^gen_code$"))
 async def generate_code(bot, query):
     user_id = query.from_user.id
